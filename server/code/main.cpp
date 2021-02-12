@@ -10,7 +10,7 @@
 //#include <iphlpapi.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <queue>
+#include <math.h>
 #include <stdlib.h>
 
 #define PORT "27015"
@@ -22,14 +22,41 @@ struct v2
     float y;
 };
 
+v2 operator+(const v2& v0, const v2& v1)
+{
+    return {v0.x+v1.x, v0.y+v1.y};
+}
+
+v2 operator-(const v2& v0, const v2& v1)
+{
+    return {v0.x-v1.x, v0.y-v1.y};
+}
+
+v2 operator-(const v2& v)
+{
+    return {-v.x, -v.y};
+}
+
+v2 operator*(const v2& v, float s)
+{
+    return {v.x*s, v.y*s};
+}
+
+float v2_leght(v2 v)
+{
+    return sqrtf(v.x*v.x+v.y*v.y);
+}
+
 struct Game
 {
     bool quit = false;
-    v2 player_size = {20.0f, 70.0f}; 
+    v2 player_size = {25.0f, 100.0f}; 
     v2 player_pos[MAX_NUMBER_OF_CLIENTS];
     v2 player_vel[MAX_NUMBER_OF_CLIENTS];
-    float ball_rad = 15.0f;
+    
     v2 ball = {800/2, 600/2};
+    float ball_rad = 10.0f;
+    v2 ball_vel = {1.0f, 0.35f};
 };
 
 enum game_commads
@@ -38,8 +65,6 @@ enum game_commads
     MOVE_DOWN,
     MOVE_LEFT,
     MOVE_RIGHT,
-    
-    QUIT,
 };
 
 struct Command
@@ -48,88 +73,44 @@ struct Command
     game_commads command;
 };
 
-struct TS_queue
-{
-    CRITICAL_SECTION critical_section;
-    std::queue<Command> queue;
-    
-    TS_queue()
-    {
-        // Initialize the critical section one time only.
-        if (!InitializeCriticalSectionAndSpinCount(&critical_section, 
-            0x00000400) ) 
-            return;
-    }
-    
-    ~TS_queue()
-    {
-        DeleteCriticalSection(&critical_section);
-    }
-
-    void push(Command command)
-    {
-        EnterCriticalSection(&critical_section); 
-        queue.push(command);
-        LeaveCriticalSection(&critical_section);
-    }
-    
-    Command pop()
-    {
-        EnterCriticalSection(&critical_section); 
-        Command c = queue.front();
-        queue.pop();
-        LeaveCriticalSection(&critical_section);
-        return c;
-    }
-
-    int size()
-    {
-        EnterCriticalSection(&critical_section); 
-        int size = queue.size();
-        LeaveCriticalSection(&critical_section);
-        return size;
-    }
-};
-
-
 struct Connection
 {
     SOCKET socket;
-    TS_queue command_queue; //NOTE(tomi):Thread safe command queue
     DWORD thread_id;
     HANDLE thread;
 };
 
-DWORD WINAPI init_client_thread(LPVOID lpParam) // LPVOID you should cast a data struct
+void connection_get_message(Connection* c, v2* player_vel)
 {
-    for(;;)
+    Command command;
+    int rec_resul = recv(c->socket, (char*)&command, sizeof(Command), 0);
+    if(rec_resul > 0)
     {
-        Connection* connection = (Connection*)lpParam;
-        Command command;
-        int rec_resul = recv(connection->socket, (char*)&command, sizeof(Command), 0);
-        if(rec_resul > 0)
+        if(command.is_valid)
         {
-
-            if(command.is_valid)
+            switch(command.command)
             {
-                if(command.command == QUIT)
+                case MOVE_UP:
                 {
-                    printf("thread end asd\n");
-                    connection->command_queue.push(command);
-                    shutdown(connection->socket, SD_SEND);
-                    closesocket(connection->socket);
-                    return 0;
-                }
-                else
+                    *player_vel = {0.0f, -1.0f};
+                }break;
+                case MOVE_DOWN:
                 {
-                    connection->command_queue.push(command);
-                }
+                    *player_vel = {0.0f, 1.0f};
+                }break;
+                case MOVE_LEFT:
+                {
+                    *player_vel = {-1.0f, 0.0f};
+                }break;
+                case MOVE_RIGHT:
+                {
+                    *player_vel = {1.0f, 0.0f};
+                }break;
             }
         }
     }
-    return 0;
-}
 
+}
 
 struct Server 
 {
@@ -159,22 +140,15 @@ void accept_clients(Server* s)
         else
         {
             printf("client%d just connect\n", s->number_clinet_connected);
+            *client = *client+1;
             //NOTE(tomi):Start thread with a queue to puts commands
-            c->thread = CreateThread(
-                    0, 
-                    0,
-                    init_client_thread,
-                    (void*)c, 
-                    0,
-                    &c->thread_id);
-            
-            if (c->thread == NULL)
-            {
-                printf("Error creating thread!\n");
-                return;
-            }
+            //c->thread = CreateThread(0, 0, init_client_thread, (void*)c, 0, &c->thread_id);
+            //if (c->thread == NULL)
+            //{
+            //    printf("Error creating thread!\n");
+            //    return;
+            //}
         }
-        *client = *client+1;
     }
 }
 
@@ -228,44 +202,44 @@ Server server_create(const char* port)
 
 void update_game(Game* game, Server* s)
 {
-    float speed = 10.0f; 
+    float speed = 15.0f; 
+    float ball_speed = 20.0f;
+    (void)ball_speed;
     //NOTE(tomi):Process queue commads
     for(int client = 0; client < MAX_NUMBER_OF_CLIENTS; client++)
     {
-        if(s->connection[client].command_queue.size() > 0 )
-        {
-            Command command = s->connection[client].command_queue.pop();
-            if(command.is_valid)
-            {
-                switch(command.command)
-                {
-                    case MOVE_UP:
-                    {
-                        game->player_vel[client]= {0.0f, -1.0f};
-                    }break;
-                    case MOVE_DOWN:
-                    {
-                        game->player_vel[client]= {0.0f, 1.0f};
-                    }break;
-                    case MOVE_LEFT:
-                    {
-                        game->player_vel[client]= {-1.0f, 0.0f};
-                    }break;
-                    case MOVE_RIGHT:
-                    {
-                        game->player_vel[client]= {1.0f, 0.0f};
-                    }break;
-                    case QUIT:
-                    {
-                        if(s->number_clinet_connected > 0)
-                            s->number_clinet_connected = s->number_clinet_connected-1; 
-                    }break;
-                }
-                game->player_pos[client].x += game->player_vel[client].x * speed; 
-                game->player_pos[client].y += game->player_vel[client].y * speed;
-            }
-        }
+        game->player_vel[client] = {};
+        connection_get_message(&s->connection[client], &game->player_vel[client]);
+        game->player_pos[client].x += game->player_vel[client].x * speed; 
+        game->player_pos[client].y += game->player_vel[client].y * speed;
     }
+   
+
+    if(game->ball.x-game->ball_rad < 0 || game->ball.x+game->ball_rad > 800)
+        game->ball_vel.x = -game->ball_vel.x;
+    if(game->ball.y-game->ball_rad < 0 || game->ball.y+game->ball_rad > 600)
+        game->ball_vel.y = -game->ball_vel.y;
+
+    game->ball = game->ball + game->ball_vel * ball_speed;
+
+    //NOTE(tomi):Collision with the player
+    for(int client = 0; client < MAX_NUMBER_OF_CLIENTS; client++)
+    {
+        int x0 = game->player_pos[client].x; 
+        int x1 = game->player_pos[client].x + game->player_size.x;
+        int y0 = game->player_pos[client].y;
+        int y1 = game->player_pos[client].y + game->player_size.y;
+        
+        int bx0 = game->ball.x - game->ball_rad;
+        int bx1 = game->ball.x + game->ball_rad;
+        int by0 = game->ball.y - game->ball_rad;
+        int by1 = game->ball.y + game->ball_rad;
+        
+        if((bx0 <= x1 && bx1 >= x0) && (by0 <= y1 && by1 >= y0))
+            game->ball_vel.x = -game->ball_vel.x;
+
+    }
+
 }
 
 void send_game(SOCKET socket, Game game)

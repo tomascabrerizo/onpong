@@ -33,8 +33,10 @@ struct Game
     v2 player_size; 
     v2 player_pos[MAX_NUMBER_OF_CLIENTS];
     v2 player_vel[MAX_NUMBER_OF_CLIENTS];
-    float ball_rad = 5.0f;
-    v2 ball;
+    
+    v2 ball = {800/2, 600/2};
+    float ball_rad = 15.0f;
+    v2 ball_vel = {1.0f, 0.0f};
 };
 
 enum game_commads
@@ -43,8 +45,6 @@ enum game_commads
     MOVE_DOWN,
     MOVE_LEFT,
     MOVE_RIGHT,
-
-    QUIT,
 };
 
 struct Command
